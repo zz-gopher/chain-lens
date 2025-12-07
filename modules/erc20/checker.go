@@ -4,7 +4,7 @@ import (
 	"chain-lens/core"
 	"chain-lens/tools"
 	"fmt"
-	"math/big"
+	"log"
 
 	"github.com/ethereum/go-ethereum/common"
 )
@@ -17,23 +17,17 @@ type Checker struct {
 	Symbol       string
 }
 
-type TokenBalance struct {
-	Symbol        string     // 代币符号，如 "ETH", "USDT"
-	Balance       *big.Float // 余额
-	WalletAddress string     // 钱包地址
-}
-
 // NewChecker initializes a Checker for the given ERC20 token.
 // It binds the token contract and loads basic metadata (decimals and symbol).
 // Decimals must be fetched successfully; symbol falls back to "UNKNOWN" on error.
 func NewChecker(tokenAddress common.Address, evmClient *core.EvmClient) (*Checker, error) {
 	token, err := NewToken(tokenAddress, evmClient.Client)
 	if err != nil {
-		return nil, fmt.Errorf("failed to bind token: %w", err)
+		log.Fatalf("❌ Failed to bind token %s: %v", tokenAddress, err)
 	}
 	decimals, err := token.Decimals(nil)
 	if err != nil {
-		return nil, fmt.Errorf("failed to decimals: %w", err)
+		log.Fatalf("❌ Failed to decimals: %s: %v", tokenAddress, err)
 	}
 	symbol, err := token.Symbol(nil)
 	if err != nil {
@@ -48,13 +42,13 @@ func NewChecker(tokenAddress common.Address, evmClient *core.EvmClient) (*Checke
 	}, nil
 }
 
-func (c *Checker) BalanceOf(wallet common.Address) (*TokenBalance, error) {
+func (c *Checker) BalanceOf(wallet common.Address) (*core.TokenBalance, error) {
 	rawBalance, err := c.Token.BalanceOf(nil, wallet)
 	if err != nil {
 		return nil, fmt.Errorf("查询余额失败: %w", err)
 	}
 	readableBalance := tools.WeiToEther(rawBalance, c.Decimals)
-	return &TokenBalance{
+	return &core.TokenBalance{
 		Symbol:        c.Symbol,
 		Balance:       readableBalance,
 		WalletAddress: wallet.String(),

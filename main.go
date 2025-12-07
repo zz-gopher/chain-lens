@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"chain-lens/modules/native"
 	"encoding/json"
 	"flag"
 	"fmt" // 打印输出
@@ -12,7 +13,6 @@ import (
 	"time"
 
 	"chain-lens/core"
-	"chain-lens/modules/erc20"
 
 	"github.com/ethereum/go-ethereum/common"
 )
@@ -57,16 +57,14 @@ func main() {
 	var wg sync.WaitGroup
 	startTime := time.Now()
 
-	erc20Checker, err := erc20.NewChecker(common.HexToAddress(cfg.TokenAddress), client)
-	if err != nil {
-		log.Fatal(err)
-	}
+	ethChecker, _ := native.NewChecker(client)
+	//usdtChecker, _ := erc20.NewChecker(common.HexToAddress(cfg.TokenAddress), client)
 
 	for i, addr := range addresses {
 		wg.Add(1)
 		go func(idx int, address common.Address) {
 			defer wg.Done()
-			tokenBalance, err := erc20Checker.BalanceOf(address)
+			tokenBalance, err := ethChecker.BalanceOf(address)
 			if err != nil {
 				fmt.Printf("❌ 第 %d 个地址查询失败: %v\n", idx+1, err)
 				return
