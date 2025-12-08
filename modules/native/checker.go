@@ -3,7 +3,6 @@ package native
 import (
 	"chain-lens/core"
 	"chain-lens/tools"
-
 	"context"
 
 	"github.com/ethereum/go-ethereum/common"
