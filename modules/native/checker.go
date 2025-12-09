@@ -27,8 +27,10 @@ func (c *Checker) BalanceOf(address common.Address) (*core.TokenBalance, error) 
 	}
 	ethValue := tools.WeiToEther(weiBalance, 18)
 	return &core.TokenBalance{
-		Symbol:        "ETH",
-		Balance:       ethValue,
-		WalletAddress: address.String(),
+		Symbol:       "ETH",
+		Balance:      ethValue,
+		Owner:        address,
+		TokenAddress: address,
+		Success:      true,
 	}, nil
 }

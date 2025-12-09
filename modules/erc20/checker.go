@@ -48,8 +48,10 @@ func (c *Checker) BalanceOf(wallet common.Address) (*core.TokenBalance, error) {
 	}
 	readableBalance := tools.WeiToEther(rawBalance, c.Decimals)
 	return &core.TokenBalance{
-		Symbol:        c.Symbol,
-		Balance:       readableBalance,
-		WalletAddress: wallet.String(),
+		Symbol:       c.Symbol,
+		Balance:      readableBalance,
+		Owner:        wallet,
+		TokenAddress: c.TokenAddress,
+		Success:      true,
 	}, nil
 }

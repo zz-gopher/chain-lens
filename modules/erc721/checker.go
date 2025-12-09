@@ -38,8 +38,10 @@ func (c *Checker) BalanceOf(wallet common.Address) (*core.TokenBalance, error) {
 		return nil, fmt.Errorf("查询余额失败: %w", err)
 	}
 	return &core.TokenBalance{
-		Symbol:        c.Symbol,
-		Balance:       new(big.Float).SetInt(rawBalance),
-		WalletAddress: wallet.String(),
+		Symbol:       c.Symbol,
+		Balance:      new(big.Float).SetInt(rawBalance),
+		Owner:        wallet,
+		TokenAddress: c.TokenAddress,
+		Success:      true,
 	}, nil
 }

@@ -2,19 +2,20 @@ package main
 
 import (
 	"bufio"
+	"chain-lens/core"
 	"chain-lens/modules/erc20"
 	"chain-lens/modules/erc721"
+	"chain-lens/modules/multicall"
 	"chain-lens/modules/native"
 	"encoding/json"
 	"flag"
 	"fmt"
 	"log"
+	"math/big"
 	"os"
 	"strings"
 	"sync"
 	"time"
-
-	"chain-lens/core"
 
 	"github.com/ethereum/go-ethereum/common"
 )
@@ -25,8 +26,13 @@ type Config struct {
 	TokenType    string `json:"token_type"`
 }
 
+type RetryTask struct {
+	Index   int
+	Address common.Address
+}
+
 func main() {
-	// 1. 读取配置文件
+	// 读取配置文件
 	configFile, err := os.ReadFile("config.json")
 	if err != nil {
 		log.Fatal("请确保目录下有 config.json 文件")
@@ -40,7 +46,7 @@ func main() {
 	filePath := flag.String("file", "wallets.txt", "包含钱包地址的文件路径 (每行一个)")
 	flag.Parse()
 
-	// 2. 读取文件
+	// 读取文件
 	addresses, err := loadAddresses(*filePath)
 	if err != nil {
 		log.Fatalf("❌ 无法读取文件: %v", err)
@@ -56,31 +62,110 @@ func main() {
 	}
 	defer client.Close()
 	fmt.Println("Connected to EVM")
-
-	var wg sync.WaitGroup
 	startTime := time.Now()
-
-	//ethChecker, _ := native.NewChecker(client)
-	//usdtChecker, _ := erc20.NewChecker(common.HexToAddress(cfg.TokenAddress), client)
-	//erc721Checker, _ := erc721.NewChecker(common.HexToAddress(cfg.TokenAddress), client)
-
-	checker := NewTokenChecker(cfg, client)
-
-	for i, addr := range addresses {
-		wg.Add(1)
-		go func(idx int, address common.Address) {
-			defer wg.Done()
-			tokenBalance, err := checker.BalanceOf(address)
-			if err != nil {
-				fmt.Printf("❌ 第 %d 个地址查询失败: %v\n", idx+1, err)
-				return
-			}
-			fmt.Printf("✅ [%d] Address: %s... | Balance: %s %s \n", idx+1, address.String()[:6], fmt.Sprintf("%.4f", tokenBalance.Balance), tokenBalance.Symbol)
-		}(i, addr)
-
+	multicallChecker, _ := multicall.NewMultiChecker(client.Client)
+	tokenType, err := ParseTokenType(cfg.TokenType)
+	if err != nil {
+		log.Fatal(err)
 	}
-	wg.Wait()
-	fmt.Printf("🎉 All tasks completed! Total elapsed time: %v\n", time.Since(startTime))
+	tokenBalances, err := multicallChecker.CheckToken(tokenType, common.HexToAddress(cfg.TokenAddress), addresses)
+
+	// 准备重试任务列表
+	var retryTasks []RetryTask
+
+	if err != nil {
+		// --- 情况 A: Multicall 整体失败 (比如 RPC 不支持，或者合约报错) ---
+		fmt.Printf("⚠️ Multicall 整体失败: %v，切换全量并发查询模式...\n", err)
+		tokenBalances = make([]core.TokenBalance, len(addresses))
+		// 所有地址都要重试
+		for i, addr := range addresses {
+			retryTasks = append(retryTasks, RetryTask{Index: i, Address: addr})
+		}
+	} else {
+		// --- 情况 B: Multicall 成功，但可能有部分个例失败 ---
+		for i, tb := range tokenBalances {
+			if !tb.Success {
+				retryTasks = append(retryTasks, RetryTask{Index: i, Address: tb.Owner})
+			}
+		}
+	}
+	// 执行并发补救 (如果有失败任务)
+	if len(retryTasks) > 0 {
+		fmt.Printf("🔄 开始并发修补 %d 个失败任务...\n", len(retryTasks))
+
+		var wg sync.WaitGroup
+		var mu sync.Mutex // 关键：保护 tokenBalances 的写锁
+
+		// 信号量：限制并发数 (比如限制 20 个并发)，防止把 RPC 节点打挂
+		sem := make(chan struct{}, 20)
+
+		// 初始化单次查询器 (Fallback Checker)
+		singleChecker := NewTokenChecker(cfg, client)
+
+		for _, task := range retryTasks {
+			wg.Add(1)
+			sem <- struct{}{} // 拿令牌
+
+			go func(t RetryTask) {
+				defer wg.Done()
+				defer func() { <-sem }() // 还令牌
+
+				// 执行单次查询
+				singleResult, err := singleChecker.BalanceOf(t.Address)
+
+				// 加锁回写数据
+				mu.Lock()
+				defer mu.Unlock()
+
+				if err != nil {
+					// 彻底失败：记录错误
+					fmt.Printf("❌ 重试仍失败 [%d] %s: %v\n", t.Index, t.Address.Hex(), err)
+					// 确保结果数组里对应的位置有标记
+					tokenBalances[t.Index].Owner = t.Address
+					tokenBalances[t.Index].Success = false
+				} else {
+					// 🎉 挽救成功：更新原本的数据
+					fmt.Printf("✅ 修补成功 [%d] %s\n", t.Index, t.Address.Hex())
+					// 这里要把 singleResult 转换成 TokenBalance 格式填回去
+					tokenBalances[t.Index] = core.TokenBalance{
+						TokenAddress: common.HexToAddress(cfg.TokenAddress),
+						Owner:        t.Address,
+						Balance:      singleResult.Balance, // 假设 singleResult 结构
+						Symbol:       singleResult.Symbol,
+						Success:      true, // 标记为成功
+					}
+				}
+			}(task)
+		}
+		wg.Wait()
+	}
+	// 最终统计
+	totalBalance := new(big.Float)
+	successCount := 0
+	for idx, tb := range tokenBalances {
+		if tb.Success {
+			successCount++
+			// 🔒 安全检查：防止 tb.Balance 为 nil 导致 panic
+			if tb.Balance != nil {
+				// 累加逻辑: totalBalance = totalBalance + tb.Balance
+				totalBalance.Add(totalBalance, tb.Balance)
+			}
+			// 这里可以打印最终结果
+			fmt.Printf("✅ [%d] Address: %s... | Balance: %s %s \n", idx+1, tb.Owner.String()[:6], fmt.Sprintf("%.4f", tb.Balance), tb.Symbol)
+		}
+	}
+	fmt.Printf("\n--------------------------------------------------\n")
+	fmt.Printf("📊 Summary Report\n")
+	fmt.Printf("--------------------------------------------------\n")
+	fmt.Printf("✅ Success Rate : %d / %d\n", successCount, len(addresses))
+
+	// 格式化输出:
+	// %.4f 表示保留 4 位小数
+	// big.Float 实现了 fmt.Formatter 接口，可以直接这样打印
+	fmt.Printf("💰 Total Balance: %.4f %s\n ", totalBalance, tokenBalances[0].Symbol)
+	fmt.Printf("🎉 All tasks completed! Success: %d/%d | Time: %v\n", successCount, len(addresses), time.Since(startTime))
+	fmt.Printf("--------------------------------------------------\n")
+
 }
 
 // NewTokenChecker creates a token checker.
@@ -90,44 +175,27 @@ func NewTokenChecker(cfg Config, evmClient *core.EvmClient) core.AssetChecker {
 	tokenAddr := common.HexToAddress(cfg.TokenAddress)
 	var checker core.AssetChecker
 	var err error
-	// 用户指定类型
-	if cfg.TokenType != "" {
-		switch cfg.TokenType {
-		case "native":
-			checker, err = native.NewChecker(evmClient)
-		case "erc20":
-			checker, err = erc20.NewChecker(tokenAddr, evmClient)
-		case "erc721":
-			checker, err = erc721.NewChecker(tokenAddr, evmClient)
-		default:
-			log.Fatalf("❌ Failed to create checker for token: %s", cfg.TokenAddress)
-		}
-		if err != nil {
-			log.Fatalf("❌ Failed to create checker for token: %s", cfg.TokenAddress)
-		}
-	} else {
-		// 自动识别 ERC20 → ERC721 → native
-		checker, err = erc20.NewChecker(tokenAddr, evmClient)
-		if err == nil {
-			fmt.Println("🔹 Auto-detect ERC20 token")
-			return checker
-		}
-
-		checker, err = erc721.NewChecker(tokenAddr, evmClient)
-		if err == nil {
-			fmt.Println("🔹 Auto-detect ERC721 token")
-			return checker
-		}
-
-		checker, err = native.NewChecker(evmClient)
-		if err == nil {
-			fmt.Println("🔹 Auto-detect native token")
-			return checker
-		}
-
-		// 所有方式都失败
-		log.Fatalf("❌ Failed to create checker for token: %s", cfg.TokenAddress)
+	// 自动识别 ERC20 → ERC721 → native
+	checker, err = erc20.NewChecker(tokenAddr, evmClient)
+	if err == nil {
+		fmt.Println("🔹 Auto-detect ERC20 token")
+		return checker
 	}
+
+	checker, err = erc721.NewChecker(tokenAddr, evmClient)
+	if err == nil {
+		fmt.Println("🔹 Auto-detect ERC721 token")
+		return checker
+	}
+
+	checker, err = native.NewChecker(evmClient)
+	if err == nil {
+		fmt.Println("🔹 Auto-detect native token")
+		return checker
+	}
+
+	// 所有方式都失败
+	log.Fatalf("❌ Failed to create checker for token: %s", cfg.TokenAddress)
 	return nil
 }
 
@@ -159,4 +227,20 @@ func loadAddresses(path string) ([]common.Address, error) {
 		return nil, err
 	}
 	return addresses, nil
+}
+
+func ParseTokenType(s string) (multicall.TokenType, error) {
+	if s == "" {
+		return 0, fmt.Errorf("❌ Configuration Error: 'token_type' in config file cannot be empty. Valid values are: native, erc20, erc721")
+	}
+	switch strings.ToLower(s) {
+	case "native":
+		return multicall.TokenTypeNative, nil
+	case "erc20":
+		return multicall.TokenTypeERC20, nil
+	case "erc721":
+		return multicall.TokenTypeERC721, nil
+	default:
+		return 0, fmt.Errorf("❌ Configuration Error: Invalid token_type \"%s\". Valid values are: native, erc20, erc721")
+	}
 }

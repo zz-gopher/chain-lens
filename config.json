@@ -1,4 +1,5 @@
 {
   "rpc_url": "https://eth.llamarpc.com",
-  "token_address": "0xdAC17F958D2ee523a2206206994597C13D831ec7"
+  "token_address": "0xA0b86991C6218B36c1d19D4a2E9Eb0CE3606EB48",
+  "token_type": "erc20"
 }
