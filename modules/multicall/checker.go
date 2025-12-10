@@ -41,6 +41,7 @@ type callItem struct {
 
 func NewMultiChecker(client *ethclient.Client) (*MultiChecker, error) {
 	multicallAddr := common.HexToAddress(ContractAddress)
+	// 绑定multicall合约
 	multi, err := NewMulticall(multicallAddr, client)
 	if err != nil {
 		return nil, err
@@ -56,7 +57,7 @@ func (m *MultiChecker) CheckToken(tType TokenType, tokenAddr common.Address, own
 	var callList []callItem
 	var decimals uint8
 	var symbol string
-	// 1. 准备 Multicall3 的 ABI，用于 Native 代币打包
+	// 准备 Multicall3 的 ABI，用于 Native 代币打包
 	mcAbi, err := MulticallMetaData.GetAbi()
 	if err != nil {
 		return nil, fmt.Errorf("failed to get multicall abi: %w", err)
@@ -68,10 +69,12 @@ func (m *MultiChecker) CheckToken(tType TokenType, tokenAddr common.Address, own
 			return nil, err
 		}
 		callList = append(callList, items...)
+		// 绑定erc20合约
 		token, err := erc20.NewToken(tokenAddr, m.Client)
 		if err != nil {
 			return nil, fmt.Errorf("failed to bind token %s: %w", tokenAddr.Hex(), err)
 		}
+		// 查询代币精度
 		decimals, err = token.Decimals(nil)
 		if err != nil {
 			return nil, fmt.Errorf("failed to get decimals for token %s: %w", tokenAddr.Hex(), err)
@@ -123,7 +126,7 @@ func (m *MultiChecker) CheckToken(tType TokenType, tokenAddr common.Address, own
 			AllowFailure: true, // 允许部分失败
 		})
 	}
-
+	// 执行multicall3的Aggregate3,把多个合约调用封装（Pack）成一个大调用，一次性发给区块链执行
 	resp, err := m.Multicall.Aggregate3(nil, mcCalls)
 	if err != nil {
 		return nil, fmt.Errorf("multicall aggregate3 failed: %w", err)
@@ -192,6 +195,7 @@ func setCallList(metaData *bind.MetaData, owners []common.Address, tokenAddr com
 		return nil, fmt.Errorf("parse abi: %w", err)
 	}
 	for _, owner := range owners {
+		// 把函数+参数->编码成EVM需要的calldata
 		data, err := parsed.Pack("balanceOf", owner)
 		if err != nil {
 			return nil, fmt.Errorf("pack balanceOf: %w", err)

@@ -58,7 +58,7 @@ func main() {
 func RunApp(cfg Config, addresses []common.Address) {
 	fmt.Printf("📂 Successfully loaded %d wallet addresses\n", len(addresses))
 
-	// 连接节点 (Dial)
+	// 连接RPC节点
 	client, err := core.NewClient(cfg.RpcURL)
 
 	if err != nil {
@@ -68,6 +68,7 @@ func RunApp(cfg Config, addresses []common.Address) {
 	fmt.Println("Connected to EVM")
 	startTime := time.Now()
 	multicallChecker, _ := multicall.NewMultiChecker(client.Client)
+	// 检查配置文件token_type
 	tokenType, err := ParseTokenType(cfg.TokenType)
 	if err != nil {
 		log.Fatal(err)
