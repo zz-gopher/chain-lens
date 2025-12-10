@@ -52,6 +52,10 @@ func main() {
 		log.Fatalf("❌ 无法读取文件: %v", err)
 	}
 
+	RunApp(cfg, addresses)
+}
+
+func RunApp(cfg Config, addresses []common.Address) {
 	fmt.Printf("📂 Successfully loaded %d wallet addresses\n", len(addresses))
 
 	// 连接节点 (Dial)
@@ -140,6 +144,7 @@ func main() {
 		wg.Wait()
 	}
 	// 最终统计
+	//idexList := make([]int, 0, 100)
 	totalBalance := new(big.Float)
 	successCount := 0
 	for idx, tb := range tokenBalances {
@@ -150,6 +155,10 @@ func main() {
 				// 累加逻辑: totalBalance = totalBalance + tb.Balance
 				totalBalance.Add(totalBalance, tb.Balance)
 			}
+			//if tb.Balance.Cmp(big.NewFloat(1)) >= 0 {
+			//	// 大于等于 1
+			//	idexList = append(idexList, idx+1)
+			//}
 			// 这里可以打印最终结果
 			fmt.Printf("✅ [%d] Address: %s... | Balance: %s %s \n", idx+1, tb.Owner.String()[:6], fmt.Sprintf("%.4f", tb.Balance), tb.Symbol)
 		}
@@ -166,6 +175,9 @@ func main() {
 	fmt.Printf("🎉 All tasks completed! Success: %d/%d | Time: %v\n", successCount, len(addresses), time.Since(startTime))
 	fmt.Printf("--------------------------------------------------\n")
 
+	//for _, v := range idexList {
+	//	fmt.Printf("%d ", v)
+	//}
 }
 
 // NewTokenChecker creates a token checker.
@@ -241,6 +253,21 @@ func ParseTokenType(s string) (multicall.TokenType, error) {
 	case "erc721":
 		return multicall.TokenTypeERC721, nil
 	default:
-		return 0, fmt.Errorf("❌ Configuration Error: Invalid token_type \"%s\". Valid values are: native, erc20, erc721")
+		return 0, fmt.Errorf("❌ Configuration Error: Invalid token_type. Valid values are: native, erc20, erc721")
 	}
+}
+
+// ChunkSlice 把一个大的钱包地址列表，切分成多个小批次
+// 例如：输入 5 个地址，batchSize 是 2 -> 输出 [[1,2], [3,4], [5]]
+func ChunkSlice(slice []string, chunkSize int) [][]string {
+	var chunks [][]string
+	for i := 0; i < len(slice); i += chunkSize {
+		end := i + chunkSize
+		// 防止越界
+		if end > len(slice) {
+			end = len(slice)
+		}
+		chunks = append(chunks, slice[i:end])
+	}
+	return chunks
 }
