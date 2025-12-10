@@ -27,7 +27,6 @@ func TestRunApp_ThousandWallets(t *testing.T) {
 		TokenType:    "erc20",
 	}
 
-	// 调 RunApp（不会跑真实 RPC）
 	RunApp(cfg, addrs)
 
 	t.Log("✓ 1000 地址测试通过!")
